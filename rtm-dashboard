@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+
+import json
+import webbrowser
+
+from datetime import datetime
+from rtmapi import Rtm, RtmBase
+from pathlib import Path
+from itertools import groupby
+
+
+CONFIG_DIR = Path.home() / '.config' / 'rtm-dashboard'
+CONFIG_PATH = CONFIG_DIR / 'config.json'
+CACHE_PATH = CONFIG_DIR / 'cache.json'
+
+
+PROJECT_PREFIX = 'P•'
+NEXT_ACTION_TAG = 'next-action'
+
+
+class Cache:
+    def __init__(self, path):
+        self._path = path
+        self._update = False
+        self._data = json.load(path.open()) if path.exists() else {}
+
+    def __del__(self):
+        if self._update:
+            json.dump(self._data, self._path.open('w'))
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __setitem__(self, key, value):
+        self._update = True
+        self._data[key] = value
+
+    def __contains__(self, key):
+        return key in self._data
+
+
+def auth(api_key, shared_secret, token):
+    api = Rtm(api_key, shared_secret, 'read', token)
+
+    if not api.token_valid():
+        url, frob = api.authenticate_desktop()
+        webbrowser.open(url)
+        input('Continue?')
+        api.retrieve_token(frob)
+
+    return api
+
+
+def parse_date(date_string):
+    return datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ")
+
+
+def has_due_date(taskseries):
+    return taskseries_min_due_date(taskseries) is not None
+
+
+def has_tag(taskseries, tag):
+    return any(t.value == tag for t in taskseries.tags)
+
+
+def taskseries_min_due_date(taskseries):
+    return min((parse_date(task.due) for task in taskseries if task.due != ""), default=None)
+
+
+def first_group(iterable, *, default, key):
+    groups = groupby(iterable, key=key)
+    first_keygroup = next(groups, None)
+    if first_keygroup is None:
+        return default
+    else:
+        first_key, first_group = first_keygroup
+        return list(first_group)
+
+
+def candidates_for_next_action(tasks):
+    marked_next_action = [ task for task in tasks if has_tag(task, NEXT_ACTION_TAG) ] 
+    with_due_date = [ task for task in tasks if has_due_date(task) ]
+    with_due_date.sort(key=taskseries_min_due_date)
+
+    earliest_tasks = first_group(
+        with_due_date,
+        key=lambda taskseries: taskseries_min_due_date(taskseries).date(),
+        default=[]
+    )
+
+    earliest_tasks = [ task for task in earliest_tasks if not has_tag(task, NEXT_ACTION_TAG) ]
+
+    return earliest_tasks + marked_next_action
+
+
+def print_project(name, candidate_actions):
+    print(name, candidate_actions)
+
+
+def main():
+    assert CONFIG_PATH.is_file(), f'Create config at "{CONFIG_PATH}" first'
+
+    config = json.load(CONFIG_PATH.open())
+    cache = Cache(CACHE_PATH)
+    token = cache['token'] if 'token' in cache else None
+
+    assert 'api_key' in config, 'Invalid config: api_key is missing'
+    assert 'shared_secret' in config, 'Invalid config: shared_secret is missing'
+
+    api = auth(config['api_key'], config['shared_secret'], token)
+
+    if api.token != token:
+        cache['token'] = api.token
+
+    # For interactive debugging
+    global tasks_lists
+    global lists_result
+
+    lists_result = api.rtm.lists.getList().lists
+    list_by_id = { l.id : l for l in lists_result }
+
+    project_names = [
+        l.name
+        for l in lists_result
+        if l.name.startswith(PROJECT_PREFIX)
+    ]
+
+    # There is also listContains filter
+    task_from_project_filter = ' OR '.join(f'list:"{list_name}"' for list_name in project_names)
+    is_scheduled_filter = 'due:yesterday OR dueAfter:yesterday OR tag:next-action'
+
+    tasks_lists = api.rtm.tasks.getList(filter=f'({task_from_project_filter}) AND ({is_scheduled_filter})')
+
+    print('query: ', f'({task_from_project_filter}) AND ({is_scheduled_filter})')
+
+    for tasks in tasks_lists.tasks:
+        list_name = list_by_id[tasks.id].name
+        candidates = candidates_for_next_action(tasks)
+        print_project(list_name, candidates)
+
+
+# For interactive debugging
+class Debug:
+    @staticmethod
+    def print_tasks_response():
+        from xml.etree import ElementTree
+        ElementTree.dump(tasks_lists._RtmObject__element)
+
+
+if __name__ == '__main__':
+    main()
