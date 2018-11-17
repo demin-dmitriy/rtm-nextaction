@@ -18,6 +18,51 @@ PROJECT_PREFIX = 'P•'
 NEXT_ACTION_TAG = 'next-action'
 
 
+class TermStyle:
+
+    _MAP = {
+        'bold': 1,
+        'dim': 2,
+        'underlined': 4,
+        'black': 30,
+        'red': 31,
+        'green': 32,
+        'yellow': 33,
+        'blue': 34,
+        'magenta': 35,
+        'cyan': 36,
+        'light-gray': 37,
+        'light-grey': 37,
+        'default': 39,
+        'dark-gray': 90,
+        'dark-grey': 90,
+        'light-red': 91,
+        'light-green': 92,
+        'light-yellow': 93,
+        'light-blue': 94,
+        'light-magenta': 95,
+        'light-cyan': 96,
+        'white': 97,
+    }
+
+
+    @staticmethod
+    def _modifier(code):
+        return f'\033[{code}m'
+
+
+    @staticmethod
+    def style(description, text):
+        spec = ''
+        for word in description.split():
+            spec += TermStyle._modifier(TermStyle._MAP[word])
+
+        return f'{spec}{text}\033[0m'
+
+
+style = TermStyle.style
+
+
 class Cache:
     def __init__(self, path):
         self._path = path
@@ -93,8 +138,19 @@ def candidates_for_next_action(tasks):
     return earliest_tasks + marked_next_action
 
 
-def print_project(name, candidate_actions):
-    print(name, candidate_actions)
+def print_project(name, nextactions):
+    if name.startswith(PROJECT_PREFIX):
+        name = name[len(PROJECT_PREFIX):]
+
+    print(style('blue', name))
+
+    if 0 < len(nextactions):
+        for action in nextactions:
+            print(f'  — { action.name }')
+    else:
+        print(style('dark-grey', '  (no assigned next actions)'))
+
+    print()
 
 
 def main():
@@ -131,12 +187,13 @@ def main():
 
     tasks_lists = api.rtm.tasks.getList(filter=f'({task_from_project_filter}) AND ({is_scheduled_filter})')
 
-    print('query: ', f'({task_from_project_filter}) AND ({is_scheduled_filter})')
+    next_actions_by_list_id = { l.id : [] for l in lists_result if l.name.startswith(PROJECT_PREFIX) }
 
     for tasks in tasks_lists.tasks:
-        list_name = list_by_id[tasks.id].name
-        candidates = candidates_for_next_action(tasks)
-        print_project(list_name, candidates)
+        next_actions_by_list_id[tasks.id] = candidates_for_next_action(tasks)
+
+    for list_id, next_actions in next_actions_by_list_id.items():
+        print_project(list_by_id[list_id].name, next_actions)
 
 
 # For interactive debugging
