@@ -3,7 +3,7 @@
 import json
 import webbrowser
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from rtmapi import Rtm, RtmBase
 from pathlib import Path
 from itertools import groupby
@@ -16,6 +16,9 @@ CACHE_PATH = CONFIG_DIR / 'cache.json'
 
 PROJECT_PREFIX = 'P•'
 NEXT_ACTION_TAG = 'next-action'
+
+
+MOSCOW_TZ = timezone(timedelta(hours=3))
 
 
 class TermStyle:
@@ -97,7 +100,7 @@ def auth(api_key, shared_secret, token):
 
 
 def parse_date(date_string):
-    return datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ")
+    return datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone(tz=None)
 
 
 def has_due_date(taskseries):
@@ -139,6 +142,9 @@ def candidates_for_next_action(tasks):
 
 
 def print_project(name, nextactions):
+    # TODO: show dates on the same column
+    # TODO: wrap long descriptions
+
     if name.startswith(PROJECT_PREFIX):
         name = name[len(PROJECT_PREFIX):]
 
@@ -146,7 +152,13 @@ def print_project(name, nextactions):
 
     if 0 < len(nextactions):
         for action in nextactions:
-            print(f'  — { action.name }')
+            line = action.name
+            if has_tag(action, NEXT_ACTION_TAG):
+                line += f' [{ style("dark-grey", NEXT_ACTION_TAG) }]'
+
+            if has_due_date(action):
+                line += f' | { style("green", parse_date(action.task.due).date()) }'
+            print(f'  ○ { line }')
     else:
         print(style('dark-grey', '  (no assigned next actions)'))
 
